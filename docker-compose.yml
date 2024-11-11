@@ -16,7 +16,7 @@ services:
     networks:
       confluent:
   kafka_service:
-    image: "confluentinc/cp-kafka"
+    image: "confluentinc/cp-enterprise-kafka:latest"
     hostname: kafka_service
     container_name: kafka_service
     depends_on:
@@ -35,7 +35,11 @@ services:
       KAFKA_REPLICA_FETCH_MAX_BYTES: 2000000000 # Ajuste para réplicas
       KAFKA_FETCH_MAX_BYTES: 2000000000         # Ajuste para clientes
       KAFKA_MAX_REQUEST_SIZE: 2000000000
-      KAFKA_METRICT_REPORTER: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: PLAINTEXT://kafka_service:9092
+      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      CONFLUENT_METRICS_ENABLE: 'true'
+      CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
     healthcheck:
       test: ["CMD-SHELL", "echo > /dev/tcp/kafka_service/9092"]
       interval: 10s
@@ -45,12 +49,20 @@ services:
       confluent:
   mosquito:
     image: "eclipse-mosquitto"
+    container_name: mosquitto_service
     ports:
       - "1883:1883" #Puerto para MQTT
       - "9001:9001" #Puerto webSocket
     depends_on:
       kafka_service:
         condition: service_healthy
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    healthcheck:
+      test: [ "CMD-SHELL", "mosquitto_pub -h localhost -t 'healthcheck' -m 'test' || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
   kafka-connect:
     image: "confluentinc/cp-kafka-connect"
     container_name: kafka-connect
@@ -65,17 +77,20 @@ services:
       CONNECT_BOOTSTRAP_SERVERS: "kafka_service:9092"
       CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect"
       CONNECT_REST_PORT: 8083
-      CONNECT_GROUP_ID: "quickstart"
+      CONNECT_GROUP_ID: "mosquitto_service"
       CONNECT_CONFIG_STORAGE_TOPIC: "connect-configs"
       CONNECT_OFFSET_STORAGE_TOPIC: "connect-offsets"
       CONNECT_STATUS_STORAGE_TOPIC: "connect-status"
       CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
       CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_PLUGIN_PATH: '/usr/share/java,/etc/kafka-connect/jars'
       CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
       CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+    volumes:
+        - ./connect-jars:/etc/kafka-connect/jars
     healthcheck:
       test: [ "CMD", "bash", "-c", "echo 'ruok' | nc kafka-connect 8083" ]
       interval: 10s
@@ -96,11 +111,13 @@ services:
       - "9021:9021"
     environment:
       CONTROL_CENTER_BOOTSTRAP_SERVERS: 'kafka_service:9092'
+      CONTROL_CENTER_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      CONTROL_CENTER_CONNECT_CLUSTER: "kafka-connect:8083"
       CONTROL_CENTER_REPLICATION_FACTOR: 1
       CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
       CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
       CONFLUENT_METRICS_TOPIC_REPLICATION: 1
-      CONFLIENT_METRICS_ENABLE: 'false'
+      CONFLUENT_METRICS_ENABLE: 'true'
       PORT: 9021
     networks:
       - confluent
